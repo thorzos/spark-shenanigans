@@ -1,5 +1,6 @@
 import csv
 from collections import Counter, defaultdict
+from pathlib import Path
 
 from pyspark.sql import SparkSession
 
@@ -24,6 +25,16 @@ def top_10_openings(games):
     return Counter(game["opening_name"] for game in games).most_common(10)
 
 def main():
+    spark = SparkSession.builder.master("local[*]").appName("chess").getOrCreate()
+
+    base_dir = str(Path.cwd())
+
+    df_bronze = spark.read.csv(base_dir + "/lichess-data/games.csv", header=True, inferSchema=True)
+    df_bronze.write.mode("overwrite").parquet("output/bronze/")
+
+    print(f"Bronze rows: {df_bronze.count()}")
+    df_bronze.printSchema()
+
     with open("./lichess-data/games.csv", "r") as csv_input, open("./lichess-data/games_processed.csv", "w", newline="") as csv_output:
         games_reader = csv.DictReader(csv_input)
 
