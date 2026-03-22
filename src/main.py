@@ -2,6 +2,10 @@ import csv
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import os
+os.environ["HADOOP_HOME"] = r"C:\hadoop"
+os.environ["PATH"] += r";C:\hadoop\bin"
+
 from pyspark.sql import SparkSession
 
 def valid_game(game):
@@ -26,11 +30,14 @@ def top_10_openings(games):
 
 def main():
     spark = SparkSession.builder.master("local[*]").appName("chess").getOrCreate()
+    spark.sparkContext.setLogLevel("ERROR")
 
-    base_dir = str(Path.cwd())
+    base_dir = Path.cwd()
+    lichess_data = base_dir / "lichess_data" / "games.csv"
+    output_path = base_dir / "output"
 
-    df_bronze = spark.read.csv(base_dir + "/lichess-data/games.csv", header=True, inferSchema=True)
-    df_bronze.write.mode("overwrite").parquet("output/bronze/")
+    df_bronze = spark.read.csv(str(lichess_data), header=True, inferSchema=True)
+    df_bronze.write.mode("overwrite").parquet(str(output_path / "bronze"))
 
     print(f"Bronze rows: {df_bronze.count()}")
     df_bronze.printSchema()
