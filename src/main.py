@@ -1,18 +1,15 @@
 from collections import Counter, defaultdict
 from pathlib import Path
 
+import time
 import os
 
-from pyspark.sql.functions import col
+from pyspark.sql.functions import col, count, avg, round as spark_round
 
 os.environ["HADOOP_HOME"] = r"C:\hadoop"
 os.environ["PATH"] += r";C:\hadoop\bin"
 
 from pyspark.sql import SparkSession, DataFrame
-
-
-def valid_game(game):
-    return int(game["turns"]) > 5 and game["rated"] == "True"
 
 def win_rate_by_color(games):
     wins = Counter(game["winner"] for game in games)
@@ -50,36 +47,64 @@ def silver(spark: SparkSession, base_dir: Path) -> DataFrame:
         .withColumn("black_rating", col("black_rating").cast("integer"))
     )
 
+def gold(spark: SparkSession, base_dir: Path) -> dict[str, DataFrame]:
+    df_gold = spark.read.parquet(str(base_dir / "output" / "silver"))
+
+    winrate_by_color = (
+        df_gold
+            .groupBy("winner")
+            .agg(count("*").alias("wins"))
+            .withColumn("winrate", spark_round(col("wins") / df_gold.count() * 100, 2))
+    )
+
+    avg_rating_per_opening = (
+        df_gold
+            .withColumn("avg_game_rating", (col("white_rating") + col("black_rating")) / 2)
+            .groupBy("opening_name")
+            .agg(spark_round(avg("avg_game_rating"), 0).alias("avg_rating"))
+            .orderBy(col("avg_rating").desc())
+            .limit(100)
+    )
+
+    top_openings = (
+        df_gold
+            .groupBy("opening_name")
+            .agg(count("*").alias("total_games"))
+            .orderBy(col("total_games").desc())
+            .limit(100)
+    )
+
+    return {
+        "winrate" : winrate_by_color,
+        "avg_rating_by_opening" : avg_rating_per_opening,
+        "top_openings" : top_openings
+    }
+
+
 def main():
     spark = SparkSession.builder.master("local[*]").appName("chess").getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
+
+    application_time = time.time()
 
     base_dir = Path.cwd()
     output_path = base_dir / "output"
 
     df_bronze = bronze(spark, base_dir)
     df_bronze.write.mode("overwrite").parquet(str(output_path / "bronze"))
-    print("bronze count: %d" % df_bronze.count())
+    print(f"bronze time: {time.time() - application_time:.4f}s")
 
     df_silver = silver(spark, base_dir)
     df_silver.write.mode("overwrite").parquet(str(output_path / "silver"))
-    print("silver count: %d" % df_silver.count())
+    print(f"silver time: {time.time() - application_time:.4f}s")
 
-    with open("explain_silver.txt", "w") as f:
-        f.write(df_silver._jdf.queryExecution().toString())
+    df_gold = gold(spark, base_dir)
+    for name, df in df_gold.items():
+        df.write.mode("overwrite").parquet(str(output_path / "gold" / name))
+    print(f"gold time: {time.time() - application_time:.4f}s")
 
-    # with open("./lichess-data/games.csv", "r") as csv_input, open("./lichess-data/games_processed.csv", "w", newline="") as csv_output:
-    #     games_reader = csv.DictReader(csv_input)
-    #
-    #     games = list(filter(valid_game, games_reader))
-    #
-    #     print(win_rate_by_color(games))
-    #     print(avg_rating_per_opening_top_25(games))
-    #     print(top_10_openings(games))
-    #
-    #     games_writer = csv.DictWriter(csv_output, fieldnames=["opening_name", "average_rating"])
-    #     games_writer.writeheader()
-    #     games_writer.writerows({})
+#    with open("explain_silver.txt", "w") as f:
+#       f.write(df_silver._jdf.queryExecution().toString())
 
 if __name__ == "__main__":
     main()
